@@ -149,6 +149,7 @@ struct Rect {
     p2: P,
     p3: P,
     p4: P,
+    d: Direction,
 }
 impl std::fmt::Display for Rect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -160,6 +161,7 @@ impl std::fmt::Display for Rect {
     }
 }
 
+#[derive(Debug, Clone)]
 struct State {
     n: usize,
     points: Vec<Vec<DirectedPoint>>,
@@ -228,7 +230,7 @@ impl State {
                             let p2 = cand.pop().unwrap();
                             let p3 = cand.pop().unwrap();
                             let p4 = cand.pop().unwrap();
-                            result.push(Rect { p1, p2, p3, p4 });
+                            result.push(Rect { p1, p2, p3, p4, d });
                             break;
                         }
                     }
@@ -236,6 +238,45 @@ impl State {
             }
         }
         result
+    }
+    fn applied_rect(&self, rect: &Rect) -> Result<Self, String> {
+        let mut result = self.clone();
+        let init_i = rect.p1.x as usize;
+        let init_j = rect.p1.y as usize;
+
+        let mut cur_pos = rect.p1;
+        let mut cur_d = rect.d;
+        let mut cur_d_p2d = cur_d.as_p2d();
+        loop {
+            cur_pos = cur_pos + cur_d_p2d;
+            if cur_pos.x < 0
+                || cur_pos.x >= self.n as i32
+                || cur_pos.y < 0
+                || cur_pos.y >= self.n as i32
+            {
+                return Err("Out of bounds".to_owned());
+            }
+            let ii = cur_pos.x as usize;
+            let jj = cur_pos.y as usize;
+            let p = &mut result.points[ii][jj];
+
+            if !(p.is_point_occupied || ii == init_i && jj == init_j) {
+                p.occupy_direction_at(cur_d);
+                p.occupy_direction_at(cur_d.flipped());
+                continue;
+            }
+
+            cur_d = cur_d.rotated();
+            cur_d_p2d = cur_d_p2d.rotated();
+            p.occupy_direction_at(cur_d);
+            p.occupy_direction_at(cur_d.rotated());
+
+            if cur_pos.x as usize == init_i && cur_pos.y as usize == init_j {
+                p.occupy_point();
+                break;
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -255,12 +296,21 @@ fn parse_input() -> Input {
 
 fn main() {
     let input = parse_input();
-    let state = State::new(&input);
-    let mut rects = state.get_legal_rects();
-    if let Some(r) = rects.pop() {
-        println!("1");
+    let mut state = State::new(&input);
+
+    let mut result = vec![];
+    loop {
+        let mut rects = state.get_legal_rects();
+        if let Some(r) = rects.pop() {
+            result.push(r);
+            state = state.applied_rect(&r).unwrap();
+        } else {
+            break;
+        }
+    }
+
+    println!("{}", result.len());
+    for r in result {
         println!("{}", r);
-    } else {
-        println!("0");
     }
 }
