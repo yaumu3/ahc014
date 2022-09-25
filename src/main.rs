@@ -1,6 +1,6 @@
 use proconio::input;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct P {
     x: i32,
     y: i32,
@@ -14,6 +14,9 @@ impl P {
             x: -self.y,
             y: self.x,
         }
+    }
+    fn weighted_dist(&self) -> i32 {
+        self.x.abs() * self.x.abs() + self.y.abs() * self.y.abs() + 1
     }
 }
 impl std::ops::Neg for P {
@@ -44,7 +47,7 @@ impl std::ops::Sub for P {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
     D,
     DR,
@@ -141,17 +144,15 @@ impl DirectedPoint {
     fn use_direction_at(&mut self, dir: Direction) {
         self.are_directions_used |= 1 << dir.as_idx();
     }
-    fn clear_direction_at(&mut self, dir: Direction) {
-        self.are_directions_used &= !(1 << dir.as_idx());
-    }
     fn is_direction_used_at(&self, dir: Direction) -> bool {
         self.are_directions_used >> dir.as_idx() & 1 == 1
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Rect {
-    p1: P,
+    // CCW p1 -> p2 -> p3 -> p4
+    p1: P, // A point currently not used
     p2: P,
     p3: P,
     p4: P,
@@ -169,92 +170,124 @@ impl std::fmt::Display for Rect {
 
 #[derive(Debug, Clone)]
 struct State {
-    n: usize,
     points: Vec<Vec<DirectedPoint>>,
+    centroid: P,
+    score: i32,
+    legal_rects: Vec<Rect>,
     rects_history: Vec<Rect>,
 }
 impl State {
+    fn initialize_legal_rect_by_brute_force(&mut self) {
+        let n = self.points.len();
+        let mut result = vec![];
+        for i in 0..n {
+            for j in 0..n {
+                let p1 = P::new(i as i32, j as i32);
+                for d in Direction::to_vec() {
+                    if let Some(rect) = self.get_legal_rect(p1, d) {
+                        result.push(rect);
+                    }
+                }
+            }
+        }
+        self.legal_rects = result;
+    }
     fn new(input: &Input) -> Self {
         let n = input.n;
         let mut points = vec![vec![DirectedPoint::new(); n]; n];
         for p in input.ps.iter() {
             points[p.x as usize][p.y as usize].use_point();
         }
-        Self {
-            n,
+        let mut result = Self {
             points,
+            centroid: P::new((input.n as i32 - 1) / 2, (input.n as i32 - 1) / 2),
+            score: 0,
+            legal_rects: vec![],
             rects_history: vec![],
-        }
-    }
-    fn get_legal_rects(&self) -> Vec<Rect> {
-        let mut result = vec![];
-        for (i, row) in self.points.iter().enumerate() {
-            for (j, p) in row.iter().enumerate() {
-                if p.is_point_used {
-                    continue;
-                }
-                for d in Direction::to_vec() {
-                    let mut cand = vec![];
-                    let mut cur_pos = P::new(i as i32, j as i32);
-                    let mut cur_d = d;
-                    let mut cur_d_p2d = cur_d.as_p2d();
-                    loop {
-                        cur_pos = cur_pos + cur_d_p2d;
-                        if cur_pos.x < 0
-                            || cur_pos.x >= self.n as i32
-                            || cur_pos.y < 0
-                            || cur_pos.y >= self.n as i32
-                        {
-                            break;
-                        }
-                        let ii = cur_pos.x as usize;
-                        let jj = cur_pos.y as usize;
-                        let p = &self.points[ii][jj];
-
-                        // In case the point is not occupied.
-                        if !(p.is_point_used || ii == i && jj == j) {
-                            if p.is_direction_used_at(cur_d)
-                                || p.is_direction_used_at(cur_d.flipped())
-                            {
-                                break;
-                            } else {
-                                continue;
-                            }
-                        }
-
-                        // In case the point is occupied.
-                        cur_d = cur_d.rotated();
-                        cur_d_p2d = cur_d_p2d.rotated();
-                        if p.is_direction_used_at(cur_d) || p.is_direction_used_at(cur_d.rotated())
-                        {
-                            break;
-                        }
-                        cand.push(cur_pos);
-                        if cand.len() > 4 {
-                            break;
-                        }
-
-                        // If it came back to the original position
-                        if cur_pos.x as usize == i && cur_pos.y as usize == j {
-                            let p1 = cand.pop().unwrap();
-                            let p2 = cand.pop().unwrap();
-                            let p3 = cand.pop().unwrap();
-                            let p4 = cand.pop().unwrap();
-                            result.push(Rect { p1, p2, p3, p4, d });
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        };
+        result.initialize_legal_rect_by_brute_force();
         result
     }
-    fn apply_rect(
-        &mut self,
-        rect: &Rect,
-        f: fn(&mut DirectedPoint, Direction),
-        g: fn(&mut DirectedPoint),
-    ) {
+    fn get_legal_rect(&mut self, p1: P, d: Direction) -> Option<Rect> {
+        let n = self.points.len();
+        let init_i = p1.x as usize;
+        let init_j = p1.y as usize;
+        if init_i >= n || init_j >= n {
+            return None;
+        }
+        if self.points[init_i][init_j].is_point_used {
+            return None;
+        }
+
+        let mut cur_d = d;
+        let p2 = self.search_point(p1, cur_d, cur_d.rotated())?;
+        cur_d = cur_d.rotated();
+        let p3 = self.search_point(p2, cur_d, cur_d.rotated())?;
+        cur_d = cur_d.rotated();
+        let p4 = self.search_point(p3, cur_d, cur_d.rotated())?;
+        cur_d = cur_d.rotated();
+        self.points[init_i][init_j].use_point();
+        if let Some(p1_returned) = self.search_point(p4, cur_d, cur_d.rotated()) {
+            self.points[init_i][init_j].clear_point();
+            if p1_returned != p1 {
+                return None;
+            }
+            Some(Rect { p1, p2, p3, p4, d })
+        } else {
+            self.points[init_i][init_j].clear_point();
+            None
+        }
+    }
+    fn search_point(&self, p: P, d: Direction, turned_d: Direction) -> Option<P> {
+        let n = self.points.len();
+
+        let mut cur_pos = p;
+        let flipped_d = d.flipped();
+        let d_p2d = d.as_p2d();
+        loop {
+            cur_pos = cur_pos + d_p2d;
+            let i = cur_pos.x as usize;
+            let j = cur_pos.y as usize;
+            if i >= n || j >= n {
+                return None;
+            }
+            let p = &self.points[i][j];
+
+            // In case the point is not used.
+            if !p.is_point_used {
+                if p.is_direction_used_at(d) || p.is_direction_used_at(flipped_d) {
+                    return None;
+                } else {
+                    continue;
+                }
+            }
+
+            // In case the point is used.
+            if p.is_direction_used_at(flipped_d) || p.is_direction_used_at(turned_d) {
+                return None;
+            }
+            return Some(cur_pos);
+        }
+    }
+    fn cur_p1_as_next_p2(&mut self, next_p2: P, d: Direction) -> Option<Rect> {
+        let p3_cand = self.search_point(next_p2, d.rotated(), d.flipped())?;
+        let p4_cand = self.search_point(p3_cand, d.flipped(), d.flipped().rotated())?;
+        let p1_cand = next_p2 + (p4_cand - p3_cand);
+        self.get_legal_rect(p1_cand, d)
+    }
+    fn cur_p1_as_next_p3(&mut self, next_p3: P, d: Direction) -> Option<Rect> {
+        let p2_cand = self.search_point(next_p3, d.flipped().rotated(), d.flipped())?;
+        let p4_cand = self.search_point(next_p3, d.flipped(), d.flipped().rotated())?;
+        let p1_cand = p2_cand + (p4_cand - next_p3);
+        self.get_legal_rect(p1_cand, d)
+    }
+    fn cur_p1_as_next_p4(&mut self, next_p4: P, d: Direction) -> Option<Rect> {
+        let p3_cand = self.search_point(next_p4, d, d.flipped().rotated())?;
+        let p2_cand = self.search_point(p3_cand, d.flipped().rotated(), d.flipped())?;
+        let p1_cand = p2_cand + (next_p4 - p3_cand);
+        self.get_legal_rect(p1_cand, d)
+    }
+    fn set_rect(&mut self, rect: &Rect) {
         let init_i = rect.p1.x as usize;
         let init_j = rect.p1.y as usize;
 
@@ -268,41 +301,48 @@ impl State {
             let p = &mut self.points[ii][jj];
 
             if !(p.is_point_used || ii == init_i && jj == init_j) {
-                f(p, cur_d);
-                f(p, cur_d.flipped());
+                p.use_direction_at(cur_d);
+                p.use_direction_at(cur_d.flipped());
                 continue;
             }
 
             cur_d = cur_d.rotated();
             cur_d_p2d = cur_d_p2d.rotated();
-            f(p, cur_d);
-            f(p, cur_d.rotated());
+            p.use_direction_at(cur_d);
+            p.use_direction_at(cur_d.rotated());
 
             if cur_pos.x as usize == init_i && cur_pos.y as usize == init_j {
-                g(p);
+                p.use_point();
                 break;
             }
         }
-    }
-    fn set_rect(&mut self, rect: &Rect) {
-        self.apply_rect(
-            rect,
-            |p: &mut DirectedPoint, d: Direction| p.use_direction_at(d),
-            |p: &mut DirectedPoint| p.use_point(),
-        );
         self.rects_history.push(*rect);
-    }
-    fn undo_rect(&mut self) -> Result<Rect, String> {
-        if self.rects_history.is_empty() {
-            return Err("No rects used".to_owned());
+        self.score += (rect.p1 - self.centroid).weighted_dist();
+
+        // Filter out rects which has become illegal by setting the rect
+        let mut legal_rects = vec![];
+        for r in &self.legal_rects.clone() {
+            if let Some(r) = self.get_legal_rect(r.p1, r.d) {
+                legal_rects.push(r);
+            }
         }
-        let last_rect = self.rects_history.pop().unwrap();
-        self.apply_rect(
-            &last_rect,
-            |p: &mut DirectedPoint, d: Direction| p.clear_direction_at(d),
-            |p: &mut DirectedPoint| p.clear_point(),
-        );
-        Ok(last_rect)
+        self.legal_rects = legal_rects;
+
+        // Add rects which has became legal by setting the rect
+        for d in Direction::to_vec() {
+            // Case 1: rect.p1 becomes `p2` of a new rect
+            if let Some(r) = self.cur_p1_as_next_p2(rect.p1, d) {
+                self.legal_rects.push(r)
+            }
+            // Case 2: rect.p1 becomes `p3` of a new rect
+            if let Some(r) = self.cur_p1_as_next_p3(rect.p1, d) {
+                self.legal_rects.push(r)
+            };
+            // Case 3: rect.p1 becomes `p4` of a new rect
+            if let Some(r) = self.cur_p1_as_next_p4(rect.p1, d) {
+                self.legal_rects.push(r)
+            };
+        }
     }
 }
 
@@ -322,27 +362,38 @@ fn parse_input() -> Input {
 
 fn main() {
     let input = parse_input();
-    let centroid = P::new((input.n as i32 - 1) / 2, (input.n as i32 - 1) / 2);
-    let mut state = State::new(&input);
+    let beam_width = 1;
 
+    let mut states = vec![State::new(&input)];
+    let mut terminal_states = vec![];
+
+    // beam search
     loop {
-        let mut rects = state.get_legal_rects();
-        rects.sort_unstable_by_key(|r| {
-            let dist = r.p1 - centroid;
-            dist.x.abs() + dist.y.abs()
-        });
-        if let Some(r) = rects.pop() {
-            state.set_rect(&r);
-        } else {
+        let mut next_states = vec![];
+        while let Some(s) = states.pop() {
+            if s.legal_rects.is_empty() {
+                terminal_states.push(s);
+                continue;
+            }
+            for r in &s.legal_rects {
+                let mut ns = s.clone();
+                ns.set_rect(r);
+                next_states.push(ns);
+            }
+        }
+        if next_states.is_empty() {
             break;
         }
+        next_states.sort_unstable_by_key(|s| std::cmp::Reverse(s.score));
+        next_states.truncate(beam_width);
+        states = next_states;
     }
 
-    println!("{}", state.rects_history.len());
-    for r in &state.rects_history {
+    terminal_states.sort_unstable_by_key(|s| s.score);
+
+    let best_state = terminal_states.last().unwrap();
+    println!("{}", best_state.rects_history.len());
+    for r in &best_state.rects_history {
         println!("{}", r);
     }
-
-    // while state.undo_rect().is_ok() {}
-    // dbg!(state.rects_history);
 }
