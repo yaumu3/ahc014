@@ -1,4 +1,20 @@
 use proconio::input;
+use rand::{prelude::*, SeedableRng};
+
+const TL: f64 = 5.0;
+fn get_time() -> f64 {
+    static mut STIME: f64 = -1.0;
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let ms = t.as_secs() as f64 + t.subsec_nanos() as f64 * 1e-9;
+    unsafe {
+        if STIME < 0.0 {
+            STIME = ms;
+        }
+        ms - STIME
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct P {
@@ -158,6 +174,24 @@ struct Rect {
     p4: P,
     d: Direction,
 }
+impl Rect {
+    fn is_minimal(&self) -> bool {
+        match self.d.as_idx() % 2 {
+            0 => {
+                let delta = self.p1 - self.p3;
+                delta.x.abs() == 1 && delta.y.abs() == 1
+            }
+            1 => {
+                let anti_1 = self.p1 - self.p3;
+                let anti_2 = self.p2 - self.p4;
+                let width_1 = anti_1.x.abs().max(anti_1.y.abs());
+                let width_2 = anti_2.x.abs().max(anti_2.y.abs());
+                width_1 == 2 && width_2 == 2
+            }
+            _ => unreachable!(),
+        }
+    }
+}
 impl std::fmt::Display for Rect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -174,7 +208,7 @@ struct State {
     centroid: P,
     score: i32,
     legal_rects: Vec<Rect>,
-    rects_history: Vec<Rect>,
+    prev_rect: Option<Rect>,
 }
 impl State {
     fn initialize_legal_rect_by_brute_force(&mut self) {
@@ -203,7 +237,7 @@ impl State {
             centroid: P::new((input.n as i32 - 1) / 2, (input.n as i32 - 1) / 2),
             score: 0,
             legal_rects: vec![],
-            rects_history: vec![],
+            prev_rect: None,
         };
         result.initialize_legal_rect_by_brute_force();
         result
@@ -316,7 +350,7 @@ impl State {
                 break;
             }
         }
-        self.rects_history.push(*rect);
+        self.prev_rect = Some(*rect);
         self.score += (rect.p1 - self.centroid).weighted_dist();
 
         // Filter out rects which has become illegal by setting the rect
@@ -344,6 +378,9 @@ impl State {
             };
         }
     }
+    fn is_terminal(&self) -> bool {
+        self.legal_rects.is_empty()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -361,39 +398,45 @@ fn parse_input() -> Input {
 }
 
 fn main() {
+    get_time();
+    let mut rng = StdRng::seed_from_u64(73);
+
     let input = parse_input();
-    let beam_width = 1;
+    let init_state = State::new(&input);
+    let mut best_score = 0;
+    let mut answer = vec![];
 
-    let mut states = vec![State::new(&input)];
-    let mut terminal_states = vec![];
-
-    // beam search
+    let tl = TL * 0.95;
     loop {
-        let mut next_states = vec![];
-        while let Some(s) = states.pop() {
-            if s.legal_rects.is_empty() {
-                terminal_states.push(s);
-                continue;
-            }
-            for r in &s.legal_rects {
-                let mut ns = s.clone();
-                ns.set_rect(r);
-                next_states.push(ns);
-            }
-        }
-        if next_states.is_empty() {
+        if get_time() > tl {
             break;
         }
-        next_states.sort_unstable_by_key(|s| std::cmp::Reverse(s.score));
-        next_states.truncate(beam_width);
-        states = next_states;
+        let mut state = init_state.clone();
+        let mut cand = vec![];
+        while !state.is_terminal() {
+            let minimal_rects: Vec<_> = state
+                .legal_rects
+                .iter()
+                .filter(|r| r.is_minimal())
+                .collect();
+            if minimal_rects.is_empty() {
+                let r = *state.legal_rects.choose(&mut rng).unwrap();
+                cand.push(r);
+                state.set_rect(&r);
+            } else {
+                let r = **minimal_rects.choose(&mut rng).unwrap();
+                cand.push(r);
+                state.set_rect(&r);
+            }
+        }
+        if state.score > best_score {
+            best_score = state.score;
+            answer = cand;
+        }
     }
 
-    terminal_states.sort_unstable_by_key(|s| s.score);
-
-    let best_state = terminal_states.last().unwrap();
-    println!("{}", best_state.rects_history.len());
-    for r in &best_state.rects_history {
+    println!("{}", answer.len());
+    for r in answer {
         println!("{}", r);
     }
 }
