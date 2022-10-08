@@ -39,11 +39,11 @@ def eval_result(tool_inout_file: tuple[Path, Path, Path]) -> int:
 
 if __name__ == "__main__":
     arg_parser = ArgumentParser()
-    arg_parser.add_argument("exe", metavar="X")
-    arg_parser.add_argument("tool_dir", metavar="TOOL")
-    arg_parser.add_argument("in_dir", metavar="IN")
-    arg_parser.add_argument("out_dir", metavar="OUT")
-    arg_parser.add_argument("--verbose", action="store_true")
+    arg_parser.add_argument("exe", metavar="X", help="Executable")
+    arg_parser.add_argument("tool_dir", metavar="TOOL", help="Path to local tester directory")
+    arg_parser.add_argument("in_dir", metavar="IN", help="Path to input directory")
+    arg_parser.add_argument("out_dir", metavar="OUT", help="Path to output directory")
+    arg_parser.add_argument("--verbose", action="store_true", help="Show detailed test result")
     args = arg_parser.parse_args()
 
     lg = setup_logger("runner")
